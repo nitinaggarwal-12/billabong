@@ -27,10 +27,11 @@ import sqlite3
 import sys
 import urllib.request
 import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DB = os.environ.get("CODEREV_DB", "cms.db")
 PORT = int(os.environ.get("PORT", "8000"))
+MAX_BODY = 2_000_000
 API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 # Verify against the CY2026 Physician Fee Schedule final rule before you show
@@ -311,155 +312,42 @@ left renal pelvis. The right side was not instrumented."""},
 ]
 
 PAGE = """<!doctype html><html><head><meta charset=utf-8>
-<title>Urology coding audit</title>
-<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Billabong | Clinical Coding Intelligence</title><meta name=viewport content="width=device-width,initial-scale=1">
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
-:root{--paper:#FAFAF8;--ink:#16202B;--muted:#5C6B7A;--rule:#DEDCD5;
---recover:#0F6E5C;--risk:#9E2B3F;--query:#7A5A16}
-*{box-sizing:border-box}
-body{margin:0;background:var(--paper);color:var(--ink);
-font-family:'IBM Plex Sans',system-ui,sans-serif;line-height:1.5;padding:40px 26px 80px}
-.wrap{max-width:1180px;margin:0 auto}
-h1{font-family:Newsreader,Georgia,serif;font-weight:500;font-size:34px;margin:0 0 6px;letter-spacing:-.015em}
-.sub{color:var(--muted);font-size:14.5px;max-width:62ch;margin:0}
-.head{border-bottom:2px solid var(--ink);padding-bottom:18px}
-.bar{display:flex;gap:20px;flex-wrap:wrap;font-size:12px;color:var(--muted);
-margin:14px 0 26px;font-family:'IBM Plex Mono',monospace}
-.bar b{color:var(--ink);font-weight:500}
-.grid{display:grid;grid-template-columns:1.05fr 1fr;gap:40px;align-items:start}
-@media(max-width:900px){.grid{grid-template-columns:1fr}}
-label{display:block;font-size:12.5px;font-weight:600;margin-bottom:7px}
-label span{font-weight:400;color:var(--muted)}
-textarea,input{width:100%;background:#fff;border:1px solid var(--rule);border-radius:2px;
-padding:12px 13px;color:var(--ink);font-family:'IBM Plex Mono',monospace;font-size:12.5px;line-height:1.65}
-textarea{min-height:300px;resize:vertical}
-textarea:focus,input:focus{outline:2px solid var(--ink);outline-offset:1px}
-.samples{display:flex;flex-direction:column;gap:6px;margin-bottom:22px}
-.samples button{text-align:left;background:#fff;border:1px solid var(--rule);border-radius:2px;
-padding:10px 12px;cursor:pointer;font:inherit;font-size:13px;display:flex;
-justify-content:space-between;gap:14px}
-.samples button:hover{border-color:var(--ink)}
-.samples span{color:var(--muted);font-size:12px;font-family:'IBM Plex Mono',monospace}
-.btn{background:var(--ink);color:var(--paper);border:1px solid var(--ink);padding:11px 20px;
-border-radius:2px;font:inherit;font-size:13.5px;font-weight:500;cursor:pointer;margin-top:18px}
-.btn:disabled{opacity:.35;cursor:not-allowed}
-.flag{margin:14px 0;padding:13px 15px;border:1px solid var(--risk);background:#fff;font-size:13px}
-.flag h4{margin:0 0 6px;font-size:13px;color:var(--risk)}
-.flag ul{margin:6px 0 10px;padding-left:18px;color:var(--muted)}
-.empty{border:1px dashed var(--rule);padding:40px 26px;text-align:center;color:var(--muted);
-font-size:13.5px;background:#fff}
-.layer{font-family:'IBM Plex Mono',monospace;font-size:11.5px;color:var(--muted);
-border-bottom:1px solid var(--rule);padding-bottom:6px;margin:28px 0 0}
-.layer:first-of-type{margin-top:0}
-.f{border-top:1px solid var(--rule);padding:20px 0}
-.f:first-of-type{border-top:none}
-.fh{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px}
-.code{font-family:'IBM Plex Mono',monospace;font-size:19px;font-weight:500}
-.dir{font-size:12px;font-weight:600;padding-bottom:1px}
-.under{color:var(--recover);border-bottom:2px solid var(--recover)}
-.over{color:var(--risk);border-bottom:2px solid var(--risk)}
-.query{color:var(--query);border-bottom:2px solid var(--query)}
-.info{color:var(--muted);border-bottom:2px solid var(--rule)}
-.hl{font-family:Newsreader,Georgia,serif;font-size:17px;margin:0 0 10px;max-width:52ch}
-.dt{font-size:13.5px;color:var(--muted);margin:0 0 12px;max-width:56ch}
-.cite{border-left:2px solid var(--ink);padding-left:13px;margin-bottom:12px}
-.cite .a{font-family:'IBM Plex Mono',monospace;font-size:11.5px;font-weight:500}
-.cite .s{font-size:11.5px;color:var(--muted);word-break:break-all}
-.ev{background:#fff;border:1px solid var(--rule);padding:10px 12px;
-font-family:'IBM Plex Mono',monospace;font-size:12px;margin-bottom:12px;max-width:62ch}
-.act{font-size:13.5px;max-width:56ch}
-.act b{font-weight:600}
-.vb{background:none;border:1px solid var(--rule);border-radius:2px;padding:5px 12px;
-font:inherit;font-size:12.5px;cursor:pointer;color:var(--muted);margin:12px 8px 0 0}
-.vb.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
-</style></head><body><div class=wrap>
-<div class=head><h1>Urology coding audit</h1>
-<p class=sub>Deterministic checks run against the CMS files loaded on this machine.
-Documentation review is a separate, clearly marked layer.</p></div>
-<div class=bar id=bar></div>
-<div class=grid>
-<div>
-  <label>Sample charts <span>— synthetic, safe to use</span></label>
-  <div class=samples id=samples></div>
-  <label for=note>Operative or procedure note</label>
-  <textarea id=note placeholder="Paste a de-identified note, or load a sample."></textarea>
-  <div id=phi></div>
-  <div style="margin-top:18px">
-    <label for=codes>Codes submitted <span>— e.g. 52353, 52332 x2</span></label>
-    <input id=codes placeholder="52000, 52204">
-  </div>
-  <button class=btn id=go>Run audit</button>
-</div>
-<div id=out><div class=empty>Load a sample, or paste a note and the codes that were billed.</div></div>
-</div></div>
-<script>
-const S = __SAMPLES__;
-const $ = s => document.querySelector(s);
-S.forEach((s,i)=>{const b=document.createElement('button');
-b.innerHTML = s.label + '<span>'+s.billed+'</span>';
-b.onclick=()=>{$('#note').value=s.note;$('#codes').value=s.billed;check();$('#out').innerHTML='';};
-$('#samples').appendChild(b);});
-
-fetch('/status').then(r=>r.json()).then(d=>{
-  $('#bar').innerHTML = Object.entries(d.counts).map(([k,v])=>
-    `${k} <b>${v.toLocaleString()}</b>`).join('') +
-    ` · review <b>${d.review?'on':'off'}</b>` + ` · source <b>${d.source}</b>`;
-});
-
-let phiCount=0;
-function check(){
-  const t=$('#note').value;
-  fetch('/scan',{method:'POST',body:JSON.stringify({note:t})})
-   .then(r=>r.json()).then(d=>{
-    phiCount=Object.values(d.hits).reduce((a,b)=>a+b,0);
-    $('#phi').innerHTML = phiCount ? `<div class=flag><h4>Identifiers detected — audit blocked</h4>
-      <ul>${Object.entries(d.hits).map(([k,v])=>`<li>${k} — ${v}</li>`).join('')}</ul>
-      <button class=vb onclick="redact()">Remove them and continue</button></div>` : '';
-    $('#go').disabled = phiCount>0;
-  });
-}
-function redact(){
-  fetch('/redact',{method:'POST',body:JSON.stringify({note:$('#note').value})})
-   .then(r=>r.json()).then(d=>{$('#note').value=d.note;check();});
-}
-$('#note').addEventListener('input', ()=>{clearTimeout(window.t);window.t=setTimeout(check,400);});
-
-$('#go').onclick=()=>{
-  $('#out').innerHTML='<div class=empty>Checking against CMS edit tables…</div>';
-  fetch('/audit',{method:'POST',body:JSON.stringify(
-    {note:$('#note').value,codes:$('#codes').value})})
-   .then(r=>r.json()).then(render);
-};
-
-function render(d){
-  if(d.error){$('#out').innerHTML=`<div class=flag><h4>Audit failed</h4>${d.error}</div>`;return;}
-  let h='';
-  const groups=[['rules','Rules layer — deterministic, cites a CMS file'],
-                ['review','Documentation review — model judgment, verify before use']];
-  for(const [k,title] of groups){
-    const fs=d.findings.filter(f=>f.kind===k);
-    if(!fs.length && k==='review' && d.note_review){h+=`<div class=layer>${title}</div>
-      <div class=empty style="margin-top:14px">${d.note_review}</div>`;continue;}
-    if(!fs.length) continue;
-    h+=`<div class=layer>${title}</div>`;
-    fs.forEach((f,i)=>{
-      h+=`<div class=f><div class=fh><span class=code>${f.code||'—'}</span>
-      <span class="dir ${f.direction}">${({under:'Under-coded',over:'Over-coded',
-        query:'Needs query',info:'Context'})[f.direction]||f.direction}</span>
-      ${f.confidence?`<span style="margin-left:auto;font-size:12px;color:var(--muted)">${f.confidence} confidence</span>`:''}</div>
-      <p class=hl>${f.headline}</p><p class=dt>${f.detail||''}</p>
-      <div class=cite><div class=a>${f.authority||''}</div><div class=s>${f.source||''}</div></div>
-      ${f.evidence?`<div class=ev>${f.evidence}</div>`:''}
-      <p class=act><b>Do this:</b> ${f.action||''}</p>
-      ${['Agree','Disagree','Unsure'].map(v=>
-        `<button class=vb onclick="this.parentNode.querySelectorAll('.vb').forEach(b=>b.classList.remove('on'));this.classList.add('on')">${v}</button>`).join('')}
-      </div>`;
-    });
-  }
-  if(!h) h='<div class=empty>No findings. Either the coding is clean or the note is too thin to check.</div>';
-  $('#out').innerHTML=h;
-}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Roboto+Mono:wght@400;500&display=swap');
+:root{--nav:#102a43;--blue:#1665d8;--bg:#f5f7fa;--card:#fff;--text:#172b4d;--muted:#66788a;--line:#dfe3e8;--green:#147d64;--red:#c93756;--amber:#a15c00;--violet:#6b4eff}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Inter,system-ui,sans-serif;font-size:14px}
+button,input,textarea{font:inherit}.shell{display:grid;grid-template-columns:230px 1fr;min-height:100vh}.side{background:var(--nav);color:#d9e2ec;padding:22px 16px;position:sticky;top:0;height:100vh}.brand{font-size:20px;font-weight:700;color:white;padding:0 10px 24px}.brand small{display:block;font-size:10px;letter-spacing:.12em;color:#9fb3c8;margin-top:3px}.nav{display:grid;gap:5px}.nav div{padding:10px 12px;border-radius:7px}.nav .on{background:#243b53;color:white;font-weight:600}.nav .muted{margin-top:18px;color:#829ab1;font-size:11px;text-transform:uppercase;letter-spacing:.08em}.sidefoot{position:absolute;bottom:20px;left:18px;right:18px;font-size:11px;color:#829ab1;line-height:1.5}
+.main{min-width:0}.top{height:64px;background:white;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;padding:0 28px;position:sticky;top:0;z-index:3}.top h1{font-size:17px;margin:0}.pill{padding:5px 9px;border-radius:99px;background:#e9f5f2;color:var(--green);font-size:11px;font-weight:600}.content{padding:24px 28px;max-width:1500px;margin:auto}
+.hero{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px}.hero h2{font-size:24px;margin:0 0 5px}.hero p{margin:0;color:var(--muted)}.status{display:flex;gap:14px;color:var(--muted);font:11px Roboto Mono,monospace}
+.notice{background:#eef5ff;border:1px solid #c9dcfb;border-radius:8px;padding:10px 13px;margin-bottom:18px;color:#315b8a;font-size:12px}
+.workspace{display:grid;grid-template-columns:minmax(360px,.9fr) minmax(430px,1.1fr);gap:18px}.card{background:white;border:1px solid var(--line);border-radius:10px;box-shadow:0 1px 2px rgba(16,42,67,.04)}.hd{padding:15px 17px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between}.hd b{font-size:13px}.bd{padding:17px}
+.samples{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}.sample{border:1px solid var(--line);background:white;border-radius:6px;padding:7px 9px;font-size:11px;color:var(--text);cursor:pointer}.sample:hover{border-color:var(--blue);color:var(--blue)}
+label{display:block;font-size:11px;font-weight:600;color:#52667a;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.04em}textarea,input{width:100%;border:1px solid #cbd5e1;border-radius:7px;padding:11px 12px;background:#fbfcfe;color:var(--text)}textarea{height:330px;resize:vertical;font:12px/1.6 Roboto Mono,monospace}textarea:focus,input:focus{outline:2px solid #b8d4fb;border-color:var(--blue)}
+.actions{display:flex;align-items:center;justify-content:space-between;margin-top:15px}.primary{border:0;background:var(--blue);color:white;border-radius:7px;padding:10px 16px;font-weight:600;cursor:pointer}.primary:disabled{opacity:.4}.safe{font-size:11px;color:var(--green)}
+.empty{padding:55px 24px;text-align:center;color:var(--muted)}.empty strong{display:block;color:var(--text);font-size:15px;margin-bottom:6px}.layer{padding:12px 16px;background:#f8fafc;border-bottom:1px solid var(--line);font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;display:flex;justify-content:space-between}.layer.rules{color:#315b8a}.layer.review{color:var(--violet)}
+.finding{padding:17px;border-bottom:1px solid var(--line)}.finding:last-child{border-bottom:0}.row{display:flex;gap:8px;align-items:center}.code{font:600 14px Roboto Mono,monospace}.tag{font-size:10px;font-weight:700;padding:3px 6px;border-radius:4px}.over{background:#fff0f3;color:var(--red)}.under{background:#e9f5f2;color:var(--green)}.query{background:#fff7e6;color:var(--amber)}.info{background:#edf2f7;color:#52667a}.confidence{margin-left:auto;font-size:10px;color:var(--muted)}.finding h3{font-size:14px;margin:10px 0 7px}.finding p{font-size:12px;color:var(--muted);line-height:1.55;margin:6px 0}.evidence{border-left:3px solid var(--violet);background:#faf9ff;padding:9px 11px;margin:10px 0;font:11px/1.5 Roboto Mono,monospace}.authority{background:#f8fafc;border-radius:6px;padding:9px 10px;margin:10px 0;font-size:10.5px;color:#52667a;word-break:break-word}.authority b{display:block;color:var(--text);margin-bottom:2px}.decision{display:flex;gap:6px;margin-top:12px}.decision button{background:white;border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:11px;cursor:pointer}.decision button.on{background:var(--nav);color:white;border-color:var(--nav)}
+.flag{background:#fff5f5;border:1px solid #ffd2da;border-radius:7px;padding:11px;margin-top:10px;color:var(--red);font-size:12px}.flag button{margin-top:8px}.legend{display:flex;gap:12px;font-size:10px;color:var(--muted)}.dot:before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--blue);margin-right:5px}.dot.ai:before{background:var(--violet)}
+@media(max-width:980px){.shell{grid-template-columns:1fr}.side{display:none}.workspace{grid-template-columns:1fr}.top{position:static}.content{padding:18px}}
+</style></head><body><div class=shell>
+<aside class=side><div class=brand>Billabong<small>CLINICAL CODING INTELLIGENCE</small></div><div class=nav><div class=on>Audit workspace</div><div>Case queue</div><div>Rule integrity</div><div>Evaluation lab</div><div class=muted>Governance</div><div>CMS data health</div><div>Audit trail</div></div><div class=sidefoot>Decision support only<br>Human verification required</div></aside>
+<main class=main><header class=top><h1>Urology coding audit</h1><span class=pill>Demo environment</span></header><div class=content>
+<div class=hero><div><h2>Review a procedure note</h2><p>CMS rule checks and documentation judgment stay visibly separate.</p></div><div class=status id=bar>Loading data status…</div></div>
+<div class=notice><b>Privacy gate:</b> identifiers are screened before an audit can run. Use de-identified or synthetic notes for this demo.</div>
+<div class=workspace><section class=card><div class=hd><b>Clinical documentation</b><span class=safe>● Privacy screening active</span></div><div class=bd>
+<div class=samples id=samples></div><label for=note>Operative / procedure note</label><textarea id=note placeholder="Paste a de-identified note, or choose a synthetic sample above."></textarea><div id=phi></div>
+<label for=codes>Submitted CPT / HCPCS codes</label><input id=codes placeholder="e.g. 52353, 52332 x2"><div class=actions><span style="font-size:11px;color:var(--muted)">Rules first · Review second · Human decides</span><button class=primary id=go>Run coding audit</button></div>
+</div></section><section class=card><div class=hd><b>Audit findings</b><div class=legend><span class=dot>Published rule</span><span class="dot ai">AI-assisted review</span></div></div><div id=out><div class=empty><strong>Ready for review</strong>Select a synthetic case or enter a de-identified note and submitted codes.</div></div></section></div>
+</div></main></div><script>
+const S=__SAMPLES__,$=s=>document.querySelector(s);const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+S.forEach(s=>{let b=document.createElement('button');b.className='sample';b.textContent=s.label+' · '+s.billed;b.onclick=()=>{$('#note').value=s.note;$('#codes').value=s.billed;check();};$('#samples').appendChild(b)});
+fetch('/status').then(r=>r.json()).then(d=>{$('#bar').innerHTML='<span>CMS source <b>'+esc(d.source)+'</b></span><span>PTP <b>'+Number(d.counts.ptp||0).toLocaleString()+'</b></span><span>MUE <b>'+Number(d.counts.mue||0).toLocaleString()+'</b></span><span>Review <b>'+(d.review?'enabled':'demo-off')+'</b></span>'}).catch(()=>{$('#bar').textContent='Status unavailable'});
+let phiCount=0;function check(){fetch('/scan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({note:$('#note').value})}).then(r=>r.json()).then(d=>{phiCount=Object.values(d.hits||{}).reduce((a,b)=>a+b,0);$('#go').disabled=phiCount>0;$('#phi').innerHTML=phiCount?'<div class=flag><b>Identifiers detected — audit blocked</b><br>'+Object.entries(d.hits).map(([k,v])=>esc(k)+' '+v).join(' · ')+'<br><button class=sample onclick="redact()">Redact detected identifiers</button></div>':''})}
+function redact(){fetch('/redact',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({note:$('#note').value})}).then(r=>r.json()).then(d=>{$('#note').value=d.note;check()})}
+$('#note').addEventListener('input',()=>{clearTimeout(window.t);window.t=setTimeout(check,350)});
+$('#go').onclick=()=>{if(!$('#codes').value.trim()||!$('#note').value.trim()){return} $('#out').innerHTML='<div class=empty><strong>Running audit…</strong>Checking deterministic CMS rules before documentation review.</div>';fetch('/audit',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({note:$('#note').value,codes:$('#codes').value})}).then(r=>r.json()).then(render).catch(()=>{$('#out').innerHTML='<div class=empty><strong>Audit unavailable</strong>Please retry.</div>'})};
+function render(d){if(d.error){$('#out').innerHTML='<div class=empty><strong>Audit blocked</strong>'+esc(d.error)+'</div>';return}let h='';for(const [k,title,sub] of [['rules','CMS rules layer','Deterministic · published source'],['review','Documentation review','AI-assisted · coder verification']]){let fs=(d.findings||[]).filter(f=>f.kind===k);if(!fs.length&&k==='review'&&d.note_review){h+='<div class="layer review"><span>'+title+'</span><span>'+sub+'</span></div><div class=empty>'+esc(d.note_review)+'</div>';continue}if(!fs.length)continue;h+='<div class="layer '+k+'"><span>'+title+'</span><span>'+sub+'</span></div>';fs.forEach(f=>{let label={under:'Under-coded',over:'Over-coded',query:'Needs query',info:'Context'}[f.direction]||f.direction;h+='<article class=finding><div class=row><span class=code>'+esc(f.code||'—')+'</span><span class="tag '+esc(f.direction)+'">'+esc(label)+'</span>'+(f.confidence?'<span class=confidence>'+esc(f.confidence)+' confidence</span>':'')+'</div><h3>'+esc(f.headline)+'</h3><p>'+esc(f.detail||'')+'</p>'+(f.evidence?'<div class=evidence>“'+esc(f.evidence)+'”</div>':'')+'<div class=authority><b>'+esc(f.authority||'')+'</b>'+esc(f.source||'')+'</div><p><b>Recommended next step:</b> '+esc(f.action||'')+'</p><div class=decision><button onclick="pick(this)">Agree</button><button onclick="pick(this)">Disagree</button><button onclick="pick(this)">Unsure</button></div></article>'})}if(!h)h='<div class=empty><strong>No findings returned</strong>No issue was identified by the loaded rules and enabled review layers.</div>';$('#out').innerHTML=h}
+function pick(b){b.parentNode.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on')}
 </script></body></html>"""
 
 
@@ -467,10 +355,15 @@ class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
-    def _send(self, obj, ctype="application/json"):
+    def _send(self, obj, ctype="application/json", status=200):
         body = (json.dumps(obj) if ctype == "application/json" else obj).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("content-type", ctype + "; charset=utf-8")
+        self.send_header("cache-control", "no-store")
+        self.send_header("x-content-type-options", "nosniff")
+        self.send_header("x-frame-options", "DENY")
+        self.send_header("referrer-policy", "no-referrer")
+        self.send_header("content-security-policy", "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self' 'unsafe-inline'; connect-src 'self'")
         self.send_header("content-length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -478,6 +371,8 @@ class H(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/":
             self._send(PAGE.replace("__SAMPLES__", json.dumps(SAMPLES)), "text/html")
+        elif self.path == "/health":
+            self._send({"ok": True, "service": "billabong"})
         elif self.path == "/status":
             cx = db()
             counts = {}
@@ -496,7 +391,14 @@ class H(BaseHTTPRequestHandler):
 
     def do_POST(self):
         n = int(self.headers.get("content-length", 0))
-        payload = json.loads(self.rfile.read(n) or "{}")
+        if n > MAX_BODY:
+            self._send({"error": "Request too large."}, status=413)
+            return
+        try:
+            payload = json.loads(self.rfile.read(n) or "{}")
+        except json.JSONDecodeError:
+            self._send({"error": "Invalid JSON."}, status=400)
+            return
 
         if self.path == "/scan":
             self._send({"hits": scan(payload.get("note", ""))})
@@ -537,4 +439,4 @@ if __name__ == "__main__":
         webbrowser.open(f"http://localhost:{PORT}")
     except Exception:
         pass
-    HTTPServer(("", PORT), H).serve_forever()
+    ThreadingHTTPServer(("", PORT), H).serve_forever()
